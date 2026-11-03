@@ -1,0 +1,681 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Patch queue</title>
+<meta name="description" content="What's actionable right now in the team's Phabricator queue, and how long each patch has been waiting.">
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #fff; color: #000;
+    font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 1040px; margin: 0 auto; padding: 32px 16px 64px; }
+  main.narrow { max-width: 760px; }
+  a { color: inherit; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  h1 { font-size: 20px; margin: 0; }
+  .top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  .meta { color: #666; font-size: 13px; }
+  .controls { display: flex; gap: 8px; margin-top: 12px; font-size: 13px; flex-wrap: wrap; align-items: center; }
+  .spacer { flex: 1; }
+  select, button {
+    font: inherit; color: #000; background: #fff; border: 1px solid #ccc; border-radius: 4px; padding: 3px 8px;
+  }
+  button { cursor: pointer; }
+  button:hover { border-color: #000; }
+  button[aria-pressed="true"] { border-color: #000; background: #000; color: #fff; }
+  .views { display: inline-flex; }
+  .views button { border-radius: 0; margin-left: -1px; }
+  .views button:first-child { border-radius: 4px 0 0 4px; margin-left: 0; }
+  .views button:last-child { border-radius: 0 4px 4px 0; }
+  .notice { margin-top: 16px; padding: 8px 10px; border: 1px solid #000; font-size: 13px; }
+  .empty { color: #999; font-size: 13px; padding: 12px 0; }
+
+  /* Shared bits */
+  /* Wait time, styled by how long it's been so old patches jump out. */
+  .age {
+    display: inline-block; min-width: 34px; padding: 0 5px; border: 1.5px solid transparent; border-radius: 10px;
+    text-align: center; font-variant-numeric: tabular-nums; white-space: nowrap; line-height: 18px;
+  }
+  .age.fresh { color: #999; }
+  .age.days { font-weight: 600; }
+  .age.aging { font-weight: 600; border-color: #000; }
+  .age.old { font-weight: 600; background: #000; border-color: #000; color: #fff; }
+  .legend { display: inline-flex; align-items: center; gap: 4px; color: #666; font-size: 12px; }
+  .legend .age { font-size: 11px; min-width: 0; }
+  .sub { color: #666; font-size: 12px; }
+  .stage { font-size: 12px; white-space: nowrap; }
+  .person { white-space: nowrap; font-weight: 600; }
+  .next-action { min-width: 0; line-height: 22px; }
+  .verb { white-space: nowrap; }
+  .avatar {
+    display: inline-block; width: 18px; height: 18px; border-radius: 50%; object-fit: cover;
+    vertical-align: middle; margin: -2px 5px 0 0; background: #eee;
+  }
+  .avatar.initials {
+    display: inline-flex; align-items: center; justify-content: center;
+    color: #000; font-size: 8px; font-weight: 600;
+  }
+  .avatar.lg { width: 24px; height: 24px; font-size: 10px; margin-right: 8px; }
+
+  /* Board */
+  .board { display: grid; gap: 16px; margin-top: 24px; align-items: start;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+  .column h2 { font-size: 14px; margin: 0 0 8px; padding-bottom: 6px; border-bottom: 2px solid #000;
+    display: flex; justify-content: space-between; }
+  .column h2 .count { font-weight: 400; color: #666; }
+  .column .empty { text-align: center; border: 1px dashed #ddd; border-radius: 6px; }
+  .card { border: 1px solid #ddd; border-radius: 6px; padding: 10px 12px; margin-bottom: 8px; }
+  .card:hover { border-color: #000; }
+  .card .title {
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+    font-weight: 600; overflow-wrap: anywhere;
+  }
+  .card .next { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; margin: 8px 0 4px; }
+  .card .next > :last-child { white-space: nowrap; }
+  .card .next-action { font-size: 13px; }
+
+  /* People */
+  .group { margin-top: 28px; }
+  .group h2 { font-size: 15px; margin: 0; padding-bottom: 6px; border-bottom: 2px solid #000; display: flex; align-items: center; }
+  .group h2 .count { font-weight: 400; color: #666; margin-left: 6px; }
+  .group h2 .outside { font-weight: 400; color: #666; font-size: 12px; margin-left: auto; }
+  .rows { list-style: none; margin: 0; padding: 0; }
+  .rows li { display: grid; grid-template-columns: 48px 1fr auto; gap: 2px 12px; padding: 8px 0; border-bottom: 1px solid #eee; align-items: baseline; }
+  .rows .title { overflow-wrap: anywhere; }
+
+  /* List */
+  table.list { width: 100%; border-collapse: collapse; margin-top: 24px; }
+  table.list th { text-align: left; font-weight: 400; color: #666; font-size: 12px; padding: 0 12px 6px 0; border-bottom: 2px solid #000; }
+  table.list td { padding: 8px 12px 8px 0; border-bottom: 1px solid #eee; vertical-align: top; }
+  table.list td.wait, table.list th.wait { text-align: right; width: 56px; }
+  table.list .title { overflow-wrap: anywhere; }
+  table.list td.next-col { width: 300px; }
+  table.list td.reload-col { width: 20px; padding-right: 0; }
+
+  /* Team */
+  h3 { font-size: 14px; margin: 40px 0 0; padding-bottom: 6px; border-bottom: 2px solid #000; }
+  table.team { width: 100%; max-width: 480px; border-collapse: collapse; }
+  table.team th { text-align: left; font-weight: 400; color: #666; font-size: 13px; padding: 8px 0 4px; }
+  table.team td { padding: 6px 0; border-bottom: 1px solid #eee; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; width: 110px; }
+  .loading { opacity: 0.5; }
+
+  /* Refreshing */
+  .card .foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  button.reload { border: 0; padding: 0 2px; color: #999; background: none; line-height: 1; }
+  button.reload:hover { color: #000; }
+  button.reload:disabled { cursor: default; color: #ccc; }
+  .refreshing button.reload { animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  button.link { border: 0; padding: 0; background: none; color: #666; text-decoration: underline; }
+  form.token { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 16px;
+    padding: 8px 10px; border: 1px solid #000; font-size: 13px; }
+  form.token input { font: inherit; flex: 1; min-width: 200px; border: 1px solid #ccc; border-radius: 4px; padding: 3px 8px; }
+  form.token .sub { flex-basis: 100%; }
+  form.token[hidden] { display: none; }
+  form.token .sub a { text-decoration: underline; }
+</style>
+<script src="/quick.js"></script>
+</head>
+<body>
+<main id="main">
+  <div class="top">
+    <h1>Patch queue</h1>
+    <span class="meta" id="meta">Loading…</span>
+  </div>
+  <div class="controls">
+    <span class="views" role="group" aria-label="View">
+      <button type="button" data-view="board">Board</button>
+      <button type="button" data-view="people">People</button>
+      <button type="button" data-view="list">List</button>
+    </span>
+    <select id="member" aria-label="Member"><option value="">Whole team</option></select>
+    <button id="drafts" type="button" aria-pressed="false">Show drafts</button>
+    <span class="spacer"></span>
+    <span class="legend" id="legend" aria-label="Wait time key"></span>
+    <button id="token-toggle" class="link" type="button">Token</button>
+    <button id="refresh" type="button">Refresh all</button>
+  </div>
+  <form id="token" class="token" hidden>
+    <label for="token-input">Phabricator API token</label>
+    <input id="token-input" type="password" autocomplete="off" spellcheck="false" placeholder="api-…">
+    <button type="submit">Save</button>
+    <button id="token-forget" type="button">Forget</button>
+    <span class="sub">Needed to refresh; anyone can view the cached board without one. Kept in this
+      browser only, never stored on the site. Create one under
+      <a id="token-link" target="_blank" rel="noopener">Settings → Conduit API Tokens</a>.</span>
+  </form>
+  <div id="notice"></div>
+  <div id="content"></div>
+</main>
+<!-- Fires if any module fails to load, most likely a missing team.json. -->
+<script type="module" onerror="document.getElementById('meta').textContent = 'Could not load the dashboard. Is site/team.json deployed?'">
+import config from './team.config.js';
+import { analyze } from './lib/analyze.js';
+import { collect, collectRevision } from './lib/collect.js';
+import { createConduit } from './lib/conduit.js';
+import { createStore, LOCK_TTL } from './lib/store.js';
+
+(function () {
+  'use strict';
+  var report = null;
+  var store = createStore(quick);
+  // A full refresh starts on page load when the cached board is older than this.
+  var REFRESH_AFTER = 20 * 60;
+  // Max Phabricator requests per refresh. Anything not reached is marked "loading history"
+  // and picked up by the next refresh, thanks to the transaction cache.
+  var BUDGET = 500;
+  var TOKEN_KEY = 'pq-token';
+  var refreshingAll = false;
+  var refreshing = new Set();  // PHIDs of cards being refreshed in this tab
+  var error = null;
+  var mePromise = null;
+  var loaded = false;  // the cache has been read at least once
+  var VIEWS = { board: renderBoard, people: renderPeople, list: renderList };
+  // ?view=people in the URL wins (handy for links), then the last view you picked.
+  var requested = new URLSearchParams(location.search).get('view') || localStorage.getItem('pq-view');
+  var view = VIEWS[requested] ? requested : 'board';
+  var showDrafts = localStorage.getItem('pq-drafts') === '1';
+  var COLUMNS = [
+    ['drafts', 'Drafts'],
+    ['review', 'Needs review'],
+    ['author', 'Author must respond'],
+    ['land', 'Ready to land']
+  ];
+  var ACTION_NAMES = {
+    'create': 'created it', 'update': 'updated the diff', 'comment': 'commented', 'inline': 'left inline comments',
+    'accept': 'accepted', 'request-changes': 'requested changes', 'request-review': 'requested review',
+    'plan-changes': 'planned changes', 'close': 'landed', 'abandon': 'abandoned', 'reclaim': 'reclaimed',
+    'reopen': 'reopened', 'status': 'changed status', 'resign': 'resigned', 'commandeer': 'commandeered',
+    'reviewers': 'edited reviewers'
+  };
+
+  // ---- helpers -------------------------------------------------------------
+
+  function el(tag, attrs) {
+    var node = document.createElement(tag);
+    if (attrs) for (var k in attrs) {
+      if (k === 'text') node.textContent = attrs[k];
+      else if (k === 'class') node.className = attrs[k];
+      else node.setAttribute(k, attrs[k]);
+    }
+    for (var i = 2; i < arguments.length; i++) {
+      var c = arguments[i];
+      if (c == null || c === false) continue;
+      node.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+    }
+    return node;
+  }
+
+  function dur(sec) {
+    if (sec < 3600) return Math.max(1, Math.round(sec / 60)) + 'm';
+    if (sec < 48 * 3600) return Math.round(sec / 3600) + 'h';
+    return Math.round(sec / 86400) + 'd';
+  }
+  function now() { return Date.now() / 1000; }
+  function has(item, cat) { return item.categories.indexOf(cat) >= 0; }
+  function byWait(a, b) { return a.waitingSince - b.waitingSince; }
+
+  // Every patch has exactly one stage: whoever has the ball decides it.
+  function columnOf(item) {
+    if (has(item, 'wip')) return 'drafts';
+    if (has(item, 'author-action')) return 'author';
+    if (has(item, 'ready-to-land')) return 'land';
+    return 'review';
+  }
+
+  // What the next person has to do, as a verb: "boek to review".
+  var AUTHOR_VERBS = { 'Changes requested': 'address feedback', 'Changes planned': 'update', 'Unanswered comments': 'reply' };
+  function actionVerb(item) {
+    switch (columnOf(item)) {
+      case 'drafts': return 'publish';
+      case 'land': return 'land';
+      case 'author': return AUTHOR_VERBS[item.reasons[0]] || 'respond';
+      default: return pendingReviewers(item).length ? 'review' : 'add reviewers';
+    }
+  }
+
+  // Mozilla titles start with "Bug 123 - "; move that out of the way of the actual title.
+  function splitTitle(title) {
+    var m = /^\s*bug\s+(\d+)\s*[-:–]\s*/i.exec(title);
+    return m ? { bug: m[1], text: title.slice(m[0].length) } : { bug: null, text: title };
+  }
+
+  // The people whose move it is.
+  function pendingReviewers(item) {
+    return item.reviewers.filter(function (r) { return r.pending; })
+      .map(function (r) { return { name: r.name, team: r.team, blocking: r.blocking }; });
+  }
+
+  // The people whose move it is. A patch nobody has been asked to review is on its author.
+  function nextPeople(item) {
+    var reviewers = item.waitingOn === 'author' ? [] : pendingReviewers(item);
+    return reviewers.length ? reviewers : [{ name: item.author, team: item.authorIsTeam }];
+  }
+
+  function hoverText(item) {
+    var last = item.lastActivity;
+    var lines = ['Waiting since ' + new Date(item.waitingSince * 1000).toLocaleString()];
+    lines.push(last.by
+      ? 'Last: ' + last.by + ' ' + (ACTION_NAMES[last.type] || last.type) + ' ' + dur(now() - last.at) + ' ago'
+      : 'No activity for ' + dur(now() - last.at));
+    return lines.join('\n');
+  }
+
+  function initials(name) {
+    var parts = name.split(/[^A-Za-z0-9]+/).filter(Boolean);
+    var letters = parts.length > 1 ? parts[0][0] + parts[1][0] : (parts[0] || '?')[0];
+    return letters.toUpperCase();
+  }
+
+  // Profile image when we have one, otherwise (or if it fails to load) initials.
+  function avatar(name, large) {
+    var cls = 'avatar' + (large ? ' lg' : '');
+    var fallback = el('span', { class: cls + ' initials', text: initials(name), 'aria-hidden': 'true' });
+    var url = report.avatars && report.avatars[name];
+    if (!url) return fallback;
+    var img = el('img', { class: cls, src: url, alt: '', loading: 'lazy', referrerpolicy: 'no-referrer' });
+    img.addEventListener('error', function () { img.replaceWith(fallback); });
+    return img;
+  }
+
+  function personChip(p) {
+    return el('span', { class: 'person' }, avatar(p.name), p.name + (p.blocking ? ' (blocking)' : ''));
+  }
+
+  // "[avatar] boek, [avatar] jdoe to review"
+  function nextAction(item) {
+    var wrap = el('span', { class: 'next-action' });
+    nextPeople(item).forEach(function (p, idx) {
+      if (idx) wrap.appendChild(document.createTextNode(', '));
+      wrap.appendChild(personChip(p));
+    });
+    wrap.appendChild(el('span', { class: 'verb', text: ' to ' + actionVerb(item) }));
+    return wrap;
+  }
+
+  function titleLink(item) {
+    return el('a', { class: 'title', href: item.uri, target: '_blank', rel: 'noopener', text: splitTitle(item.title).text });
+  }
+
+  function staleDays() { return (report && report.config.staleDays) || 7; }
+
+  // Four steps: under a day, a few days, getting old, older than staleDays.
+  function ageTier(sec) {
+    var days = sec / 86400;
+    if (days < 1) return 'fresh';
+    if (days < 3) return 'days';
+    if (days < staleDays()) return 'aging';
+    return 'old';
+  }
+
+  function ageBadge(item) {
+    var sec = now() - item.waitingSince;
+    return el('span', { class: 'age ' + ageTier(sec), text: dur(sec) });
+  }
+
+  function renderLegend() {
+    var n = staleDays();
+    var steps = [['fresh', '<1d'], ['days', '1\u20133d'], ['aging', '3\u2013' + n + 'd'], ['old', n + 'd+']];
+    document.getElementById('legend').replaceChildren.apply(
+      document.getElementById('legend'),
+      [document.createTextNode('Waiting')].concat(steps.map(function (st) {
+        return el('span', { class: 'age ' + st[0], text: st[1] });
+      })));
+  }
+
+  // "D123 · Bug 456 · by someone", plus anything extra.
+  function subLine(item, extra) {
+    var bits = ['D' + item.id];
+    var bug = splitTitle(item.title).bug;
+    if (bug) bits.push('Bug ' + bug);
+    bits = bits.concat(extra || []);
+    if (item.incomplete) bits.push('loading history');
+    return bits.join(' · ');
+  }
+
+  function involves(item, m) {
+    var drafts = has(item, 'wip');
+    return !m || item.author === m ||
+      item.reviewers.some(function (r) { return (r.pending || drafts) && r.name === m; });
+  }
+
+  // ---- refreshing ----------------------------------------------------------
+
+  function token() { return localStorage.getItem(TOKEN_KEY); }
+
+  function conduit() {
+    return createConduit({ baseUrl: config.phabricatorUrl, token: token(), budget: BUDGET });
+  }
+
+  // { id, name }: the email is stable for the lock, the name is what others see.
+  function me() {
+    mePromise = mePromise || quick.me().then(function (m) {
+      return { id: (m.person && m.person.email) || m.email, name: (m.person && m.person.name) || m.email };
+    });
+    return mePromise;
+  }
+
+  // Someone (maybe in another tab or browser) is mid-refresh.
+  function lockHolder() {
+    var lock = store.state.lock;
+    return lock && now() - lock.at < LOCK_TTL ? lock : null;
+  }
+
+  function fail(err) {
+    var msg = err.message || String(err);
+    if (/ERR-INVALID-AUTH/.test(msg)) msg = 'Phabricator rejected the token. Check it under Token.';
+    error = msg;
+    render();
+  }
+
+  // Re-fetches the whole board, writing only what changed. A shared lock keeps several
+  // viewers from hitting Phabricator at once.
+  function refreshAll() {
+    if (!token()) return showTokenForm();
+    if (refreshingAll) return Promise.resolve();
+    refreshingAll = true;
+    error = null;
+    render();
+    var who;
+    return me()
+      .then(function (m) {
+        who = m;
+        return store.acquireLock(m.id);
+      })
+      .then(function (got) {
+        if (!got) return;  // someone else is on it; their writes will arrive live
+        return store.listDocs()
+          .then(function (docs) {
+            return collect({ conduit: conduit(), config: config, cache: store.toCache(docs) })
+              .then(function (result) {
+                result.refreshedBy = who.name;
+                return store.saveFull(result, docs);
+              });
+          })
+          .finally(function () { return store.releaseLock(); });
+      })
+      .catch(fail)
+      .finally(function () {
+        refreshingAll = false;
+        render();
+      });
+  }
+
+  // Re-fetches one card. If the revision has left the queue its card goes away.
+  function refreshOne(phid) {
+    if (!token()) return showTokenForm();
+    if (!store.state.board) return refreshAll();
+    if (refreshing.has(phid)) return;
+    refreshing.add(phid);
+    error = null;
+    render();
+    collectRevision({ conduit: conduit(), phid: phid, team: store.state.board, cache: store.toCache() })
+      .then(function (result) {
+        if (result.errors.length) error = result.errors.join('; ');
+        return store.saveRevision(phid, result);
+      })
+      .catch(fail)
+      .finally(function () {
+        refreshing.delete(phid);
+        render();
+      });
+  }
+
+  function refreshButton(item) {
+    var b = el('button', { type: 'button', class: 'reload', title: 'Refresh D' + item.id,
+      'aria-label': 'Refresh D' + item.id, text: '\u21bb' });
+    if (refreshing.has(item.phid) || refreshingAll) b.disabled = true;
+    b.addEventListener('click', function () { refreshOne(item.phid); });
+    return b;
+  }
+
+  function rowClass(item) { return refreshing.has(item.phid) ? 'refreshing' : ''; }
+
+  function showTokenForm() {
+    var form = document.getElementById('token');
+    form.hidden = false;
+    document.getElementById('token-input').focus();
+  }
+
+  // Only rebuilt when the team changes, so live updates don't close an open dropdown.
+  var membersKey = null;
+  function populateMembers() {
+    var key = JSON.stringify(report.members.map(function (m) { return [m.username, m.fullName]; }));
+    if (key === membersKey) return;
+    membersKey = key;
+    var select = document.getElementById('member');
+    var current = select.value;
+    select.replaceChildren(el('option', { value: '', text: 'Whole team' }));
+    report.members.forEach(function (m) {
+      select.appendChild(el('option', { value: m.username, text: m.fullName || m.username }));
+    });
+    select.value = current;
+  }
+
+  // ---- rendering -----------------------------------------------------------
+
+  function render() {
+    document.querySelectorAll('[data-view]').forEach(function (b) {
+      b.setAttribute('aria-pressed', String(b.getAttribute('data-view') === view));
+    });
+    document.getElementById('main').className = view === 'people' ? 'narrow' : '';
+    if (!loaded) return;
+    report = analyze(store.toData(), config);
+    populateMembers();
+    var board = store.state.board;
+    var lock = lockHolder();
+    var button = document.getElementById('refresh');
+    button.disabled = refreshingAll || Boolean(lock);
+    button.textContent = refreshingAll || lock ? 'Refreshing\u2026' : 'Refresh all';
+
+    var m = document.getElementById('member').value;
+    var all = report.items.filter(function (i) { return involves(i, m); });
+    var drafts = all.filter(function (i) { return columnOf(i) === 'drafts'; }).length;
+    var items = showDrafts ? all : all.filter(function (i) { return columnOf(i) !== 'drafts'; });
+    items.sort(byWait);
+
+    document.getElementById('meta').textContent =
+      lock ? 'Refreshing (' + lock.by.split('@')[0] + ')\u2026'
+      : board ? 'Updated ' + dur(now() - board.refreshedAt) + ' ago' + (board.refreshedBy ? ' by ' + board.refreshedBy : '')
+      : 'Nothing cached yet';
+    renderLegend();
+    var toggle = document.getElementById('drafts');
+    toggle.textContent = (showDrafts ? 'Hide drafts' : 'Show drafts') + ' (' + drafts + ')';
+    toggle.setAttribute('aria-pressed', String(showDrafts));
+
+    var notice = document.getElementById('notice');
+    notice.replaceChildren();
+    if (error) notice.appendChild(el('div', { class: 'notice', text: 'Could not refresh: ' + error }));
+    if (!board && !token()) {
+      notice.appendChild(el('div', { class: 'notice',
+        text: 'Nothing cached yet. Add your Phabricator token, then Refresh all.' }));
+    }
+    if (report.meta.budgetHit) {
+      notice.appendChild(el('div', { class: 'notice',
+        text: 'The last refresh hit its ' + BUDGET + '-request limit; refresh again to fill in the rest.' }));
+    }
+    if (report.missingMembers.length) {
+      notice.appendChild(el('div', { class: 'notice',
+        text: 'Unknown usernames in team.config.js: ' + report.missingMembers.join(', ') }));
+    }
+    if (report.meta.incomplete) {
+      notice.appendChild(el('div', { class: 'notice',
+        text: report.meta.incomplete + ' revisions are still loading history. They fill in on the next refresh.' }));
+    }
+
+    document.getElementById('content').replaceChildren(VIEWS[view](items), renderTeam(m));
+  }
+
+  // Board: kanban columns of compact cards.
+  function renderBoard(items) {
+    var board = el('div', { class: 'board' });
+    COLUMNS.forEach(function (c) {
+      if (c[0] === 'drafts' && !showDrafts) return;
+      var cards = items.filter(function (i) { return columnOf(i) === c[0]; });
+      var col = el('section', { class: 'column' },
+        el('h2', null, el('span', { text: c[1] }), el('span', { class: 'count', text: String(cards.length) })));
+      if (!cards.length) col.appendChild(el('div', { class: 'empty', text: 'Nothing here' }));
+      cards.forEach(function (i) {
+        var extra = ['by ' + i.author];
+        col.appendChild(el('article', { class: 'card ' + rowClass(i), title: hoverText(i) },
+          titleLink(i),
+          el('div', { class: 'next' }, nextAction(i), ageBadge(i)),
+          el('div', { class: 'foot' }, el('span', { class: 'sub', text: subLine(i, extra) }), refreshButton(i))));
+      });
+      board.appendChild(col);
+    });
+    return board;
+  }
+
+  // People: one group per person whose move it is.
+  function renderPeople(items) {
+    var groups = {};
+    var order = [];
+    items.forEach(function (i) {
+      nextPeople(i).forEach(function (p) {
+        if (!groups[p.name]) {
+          groups[p.name] = { person: p, items: [] };
+          order.push(p.name);
+        }
+        groups[p.name].items.push(i);
+      });
+    });
+    // Team members first in team order, then everyone else by longest wait.
+    var members = report.members.map(function (mm) { return mm.username; });
+    order.sort(function (a, b) {
+      var ia = members.indexOf(a), ib = members.indexOf(b);
+      if (ia >= 0 || ib >= 0) return (ia < 0 ? Infinity : ia) - (ib < 0 ? Infinity : ib);
+      return groups[a].items[0].waitingSince - groups[b].items[0].waitingSince;
+    });
+
+    var wrap = el('div');
+    if (!order.length) wrap.appendChild(el('div', { class: 'empty', text: 'Nothing waiting on anyone.' }));
+    order.forEach(function (name) {
+      var g = groups[name];
+      var ul = el('ul', { class: 'rows' });
+      g.items.forEach(function (i) {
+        ul.appendChild(el('li', { class: rowClass(i), title: hoverText(i) },
+          el('span', null, ageBadge(i)),
+          el('span', null, titleLink(i)),
+          el('span', { class: 'stage', text: 'to ' + actionVerb(i) }),
+          el('span', { class: 'sub', style: 'grid-column: 2', text: subLine(i, ['by ' + i.author]) }),
+          el('span', { class: 'stage', style: 'grid-column: 3' }, refreshButton(i))));
+      });
+      var outside = !g.person.team && members.indexOf(name) < 0;
+      wrap.appendChild(el('section', { class: 'group' },
+        el('h2', null,
+          avatar(name, true),
+          el('span', { text: name }),
+          el('span', { class: 'count', text: String(g.items.length) }),
+          outside ? el('span', { class: 'outside', text: 'outside team' }) : null),
+        ul));
+    });
+    return wrap;
+  }
+
+  // List: everything in one table, longest wait first.
+  function renderList(items) {
+    if (!items.length) return el('div', { class: 'empty', text: 'Nothing here.' });
+    var tbody = el('tbody');
+    items.forEach(function (i) {
+      tbody.appendChild(el('tr', { class: rowClass(i), title: hoverText(i) },
+        el('td', { class: 'wait' }, ageBadge(i)),
+        el('td', null,
+          titleLink(i),
+          el('div', { class: 'sub', text: subLine(i, ['by ' + i.author]) })),
+        el('td', { class: 'next-col' }, nextAction(i)),
+        el('td', { class: 'reload-col' }, refreshButton(i))));
+    });
+    return el('table', { class: 'list' },
+      el('thead', null, el('tr', null,
+        el('th', { class: 'wait', text: 'Wait' }), el('th', { text: 'Patch' }),
+        el('th', { text: 'Next action' }), el('th'))),
+      tbody);
+  }
+
+  function renderTeam(m) {
+    var tbody = el('tbody');
+    report.members.filter(function (p) { return !m || p.username === m; }).forEach(function (p) {
+      tbody.appendChild(el('tr', null,
+        el('td', null, avatar(p.username), p.fullName || p.username),
+        el('td', { class: 'num', text: String(p.authored) }),
+        el('td', { class: 'num', text: String(p.reviewsOwed) })));
+    });
+    return el('section', null,
+      el('h3', { text: 'Team' }),
+      el('table', { class: 'team' },
+        el('thead', null, el('tr', null,
+          el('th', { text: 'Member' }),
+          el('th', { class: 'num', text: 'Open patches' }),
+          el('th', { class: 'num', text: 'Reviews owed' }))),
+        tbody));
+  }
+
+  // ---- controls ------------------------------------------------------------
+
+  document.querySelectorAll('[data-view]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      view = b.getAttribute('data-view');
+      localStorage.setItem('pq-view', view);
+      render();
+    });
+  });
+  document.getElementById('member').addEventListener('change', render);
+  document.getElementById('drafts').addEventListener('click', function () {
+    showDrafts = !showDrafts;
+    localStorage.setItem('pq-drafts', showDrafts ? '1' : '0');
+    render();
+  });
+  document.getElementById('refresh').addEventListener('click', refreshAll);
+  document.getElementById('token-link').href = config.phabricatorUrl + '/settings/panel/apitokens/';
+  document.getElementById('token-toggle').addEventListener('click', function () {
+    var form = document.getElementById('token');
+    form.hidden = !form.hidden;
+    document.getElementById('token-input').value = token() || '';
+  });
+  document.getElementById('token').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var value = document.getElementById('token-input').value.trim();
+    if (!value) return;
+    localStorage.setItem(TOKEN_KEY, value);
+    e.target.hidden = true;
+    error = null;
+    refreshAll();
+  });
+  document.getElementById('token-forget').addEventListener('click', function () {
+    localStorage.removeItem(TOKEN_KEY);
+    document.getElementById('token-input').value = '';
+    render();
+  });
+
+  // Coalesce bursts of live updates (the initial replay, a full refresh landing) into one render.
+  var pending = false;
+  function scheduleRender() {
+    if (pending) return;
+    pending = true;
+    requestAnimationFrame(function () {
+      pending = false;
+      render();
+    });
+  }
+  // Wait times are relative to now, so keep them ticking.
+  setInterval(render, 60 * 1000);
+
+  render();
+  store.start(scheduleRender)
+    .then(function () {
+      loaded = true;
+      render();
+      var board = store.state.board;
+      var stale = !board || now() - board.refreshedAt > REFRESH_AFTER;
+      if (stale && token() && !lockHolder()) refreshAll();
+    })
+    .catch(fail);
+})();
+</script>
+</body>
+</html>

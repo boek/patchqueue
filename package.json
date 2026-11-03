@@ -1,0 +1,13 @@
+{
+  "name": "patchqueue",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Track review throughput and actionable Phabricator revisions for a team",
+  "scripts": {
+    "predeploy": "test -f site/team.json || (echo 'Missing site/team.json: copy site/team.example.json and add usernames.' >&2; exit 1)",
+    "deploy": "quick deploy site boek-patchqueue",
+    "report": "node bin/report.js",
+    "test": "node --test"
+  }
+}

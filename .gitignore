@@ -1,0 +1,5 @@
+node_modules/
+.cache/
+
+# Team member usernames; deployed with the site but kept out of git.
+site/team.json
